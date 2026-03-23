@@ -1,6 +1,15 @@
 import { useState } from 'react'
-import type { BackgroundLayout, CropFrameRect, SlotRect, UpdateLayoutRequest } from '../types'
+import type { BackgroundLayout, SlotRect, SlotShape, TextZoneRect, UpdateLayoutRequest } from '../types'
 import RectCanvas from './RectCanvas'
+
+type DrawMode = 'select' | 'rect' | 'ellipse' | 'polygon'
+
+const DRAW_TOOLS: { mode: DrawMode; label: string; title: string }[] = [
+  { mode: 'select',  label: '↖',  title: 'Select / move' },
+  { mode: 'rect',    label: '▣',  title: 'Draw rect slot' },
+  { mode: 'ellipse', label: '⬭',  title: 'Draw ellipse slot' },
+  { mode: 'polygon', label: '⬡',  title: 'Draw polygon slot (click vertices, dbl-click to close)' },
+]
 
 interface Props {
   layout: BackgroundLayout
@@ -25,7 +34,16 @@ function SlotRow({
   return (
     <div className="p-2.5 bg-blue-50 border border-blue-100 rounded-lg text-xs space-y-1.5">
       <div className="flex items-center justify-between">
-        <span className="font-medium text-blue-800">Slot {index + 1}</span>
+        <div className="flex items-center gap-1.5">
+          <span className="font-medium text-blue-800">Slot {index + 1}</span>
+          <span className={`px-1 py-0.5 rounded text-[9px] font-medium ${
+            slot.shape === 'ellipse' ? 'bg-purple-100 text-purple-700' :
+            slot.shape === 'polygon' ? 'bg-orange-100 text-orange-700' :
+            'bg-blue-100 text-blue-700'
+          }`}>
+            {slot.shape ?? 'rect'}
+          </span>
+        </div>
         <button onClick={onDelete} className="text-red-400 hover:text-red-600">✕</button>
       </div>
       <div>
@@ -36,7 +54,7 @@ function SlotRow({
           className="w-full px-1.5 py-0.5 border border-blue-200 rounded text-xs"
         />
       </div>
-      <div className="grid grid-cols-2 gap-1 text-gray-500">
+      <div className="grid grid-cols-2 gap-1 text-gray-500 font-mono">
         <span>x: {slot.x.toFixed(3)}</span>
         <span>y: {slot.y.toFixed(3)}</span>
         <span>w: {slot.w.toFixed(3)}</span>
@@ -69,75 +87,50 @@ function SlotRow({
   )
 }
 
-function CropRow({
-  cf, index, onChange, onDelete,
+function TextZoneRow({
+  zone, index, onChange, onDelete,
 }: {
-  cf: CropFrameRect
+  zone: TextZoneRect
   index: number
-  onChange: (c: CropFrameRect) => void
+  onChange: (z: TextZoneRect) => void
   onDelete: () => void
 }) {
   return (
-    <div className="p-2.5 bg-orange-50 border border-orange-100 rounded-lg text-xs space-y-1.5">
+    <div className="p-2.5 bg-emerald-50 border border-emerald-100 rounded-lg text-xs space-y-1.5">
       <div className="flex items-center justify-between">
-        <span className="font-medium text-orange-800">Crop Frame {index + 1}</span>
+        <span className="font-medium text-emerald-800">Text Zone {index + 1}</span>
         <button onClick={onDelete} className="text-red-400 hover:text-red-600">✕</button>
       </div>
       <div>
         <label className="block text-gray-400 mb-0.5">ID</label>
         <input
-          value={cf.id}
-          onChange={e => onChange({ ...cf, id: e.target.value })}
-          className="w-full px-1.5 py-0.5 border border-orange-200 rounded text-xs"
+          value={zone.id}
+          onChange={e => onChange({ ...zone, id: e.target.value })}
+          className="w-full px-1.5 py-0.5 border border-emerald-200 rounded text-xs"
         />
       </div>
-      <div className="grid grid-cols-2 gap-1 text-gray-500">
-        <span>x: {cf.x.toFixed(3)}</span>
-        <span>y: {cf.y.toFixed(3)}</span>
-        <span>w: {cf.w.toFixed(3)}</span>
-        <span>h: {cf.h.toFixed(3)}</span>
-      </div>
-      <div className="grid grid-cols-2 gap-1">
-        <div>
-          <label className="block text-gray-400 mb-0.5">Shape</label>
-          <select
-            value={cf.shape}
-            onChange={e => onChange({ ...cf, shape: e.target.value })}
-            className="w-full px-1 py-0.5 border border-orange-200 rounded text-xs"
-          >
-            {['rect', 'circle', 'oval'].map(s => <option key={s}>{s}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="block text-gray-400 mb-0.5">Aspect ratio</label>
-          <input
-            type="number"
-            step="0.001"
-            placeholder="free"
-            value={cf.aspectRatio ?? ''}
-            onChange={e => onChange({ ...cf, aspectRatio: e.target.value ? Number(e.target.value) : null })}
-            className="w-full px-1 py-0.5 border border-orange-200 rounded text-xs"
-          />
-        </div>
+      <div className="grid grid-cols-2 gap-1 text-gray-500 font-mono">
+        <span>x: {zone.x.toFixed(3)}</span>
+        <span>y: {zone.y.toFixed(3)}</span>
+        <span>w: {zone.w.toFixed(3)}</span>
+        <span>h: {zone.h.toFixed(3)}</span>
       </div>
     </div>
   )
 }
 
 export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, onClose }: Props) {
-  // Layout metadata
-  const [sizeCode, setSizeCode]     = useState(layout.sizeCode)
-  const [widthMm, setWidthMm]       = useState(layout.widthMm)
-  const [heightMm, setHeightMm]     = useState(layout.heightMm)
+  const [sizeCode, setSizeCode]       = useState(layout.sizeCode)
+  const [widthMm, setWidthMm]         = useState(layout.widthMm)
+  const [heightMm, setHeightMm]       = useState(layout.heightMm)
   const [orientation, setOrientation] = useState(layout.orientation)
-  const [textZonesJson, setTextZonesJson] = useState(layout.textZonesJson ?? '')
 
-  // Rect state (edited visually in RectCanvas)
-  const [slots, setSlots]           = useState<SlotRect[]>(parseRects(layout.subjectSlotsJson, []))
-  const [cropFrames, setCropFrames] = useState<CropFrameRect[]>(parseRects(layout.subjectCropFramesJson, []))
+  const [slots, setSlots]         = useState<SlotRect[]>(parseRects(layout.subjectSlotsJson, []))
+  const [textZones, setTextZones] = useState<TextZoneRect[]>(parseRects(layout.textZonesJson, []))
 
-  const [saving, setSaving]         = useState(false)
-  const [error, setError]           = useState<string | null>(null)
+  const [saving, setSaving]     = useState(false)
+  const [error, setError]       = useState<string | null>(null)
+  const [drawMode, setDrawMode] = useState<DrawMode>('select')
 
   const aspectRatio = widthMm / heightMm
 
@@ -151,8 +144,7 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
         heightMm,
         orientation,
         subjectSlotsJson: JSON.stringify(slots),
-        subjectCropFramesJson: cropFrames.length > 0 ? JSON.stringify(cropFrames) : null,
-        textZonesJson: textZonesJson.trim() || null,
+        textZonesJson: textZones.length > 0 ? JSON.stringify(textZones) : null,
       })
     } catch (e) {
       setError((e as Error).message)
@@ -160,9 +152,10 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
     }
   }
 
-  function addSlot() {
+  function addSlot(shape: SlotShape = 'rect') {
     setSlots(prev => [...prev, {
       id: `slot-${prev.length + 1}`,
+      shape,
       x: 0.25, y: 0.20, w: 0.50, h: 0.55,
       anchor: 'BottomCenter', fitMode: 'Contain',
       allowUserMove: true, allowUserScale: true,
@@ -170,12 +163,13 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
     }])
   }
 
-  function addCropFrame() {
-    setCropFrames(prev => [...prev, {
-      id: `crop-${prev.length + 1}`,
-      x: 0.15, y: 0.10, w: 0.70, h: 0.75,
-      shape: 'rect', aspectRatio: null,
-      allowUserMove: true, allowUserScale: true,
+  function addTextZone() {
+    const ids = ['title', 'subtitle', 'footer']
+    const usedIds = new Set(textZones.map(z => z.id))
+    const nextId = ids.find(id => !usedIds.has(id)) ?? `text-${textZones.length + 1}`
+    setTextZones(prev => [...prev, {
+      id: nextId,
+      x: 0.05, y: 0.75, w: 0.90, h: 0.08,
     }])
   }
 
@@ -188,28 +182,53 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
           <h2 className="font-semibold text-gray-900">
             Layout Editor — {sizeCode} {orientation}
             <span className="ml-2 text-xs text-gray-400 font-normal">
-              drag rects to reposition · drag corners to resize
+              use toolbar to draw slots · drag to move · drag corners to resize
             </span>
           </h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">✕</button>
         </div>
 
-        {/* Body: canvas + properties panel */}
+        {/* Body */}
         <div className="flex flex-1 min-h-0 overflow-hidden">
 
-          {/* Canvas area */}
-          <div className="flex-1 bg-gray-50 p-6 overflow-auto flex items-start justify-center">
+          {/* Canvas */}
+          <div className="flex-1 bg-gray-50 p-6 overflow-auto flex flex-col items-center gap-3">
+            {/* Draw mode toolbar */}
+            <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-lg p-1 shadow-sm self-start">
+              {DRAW_TOOLS.map(tool => (
+                <button
+                  key={tool.mode}
+                  title={tool.title}
+                  onClick={() => setDrawMode(tool.mode)}
+                  className={`w-8 h-8 rounded text-sm font-bold transition-colors ${
+                    drawMode === tool.mode
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-gray-500 hover:bg-gray-100'
+                  }`}
+                >
+                  {tool.label}
+                </button>
+              ))}
+              {drawMode !== 'select' && (
+                <span className="ml-1 text-[10px] text-indigo-500 font-medium pr-1">
+                  {drawMode === 'polygon' ? 'click vertices · dbl-click to close' : 'drag to draw'}
+                </span>
+              )}
+            </div>
+
             <div className="w-full max-w-xs">
               <RectCanvas
                 imageUrl={backgroundImageUrl}
                 aspectRatio={aspectRatio}
                 slots={slots}
-                cropFrames={cropFrames}
+                textZones={textZones}
                 onSlotsChange={setSlots}
-                onCropFramesChange={setCropFrames}
+                onTextZonesChange={setTextZones}
+                drawMode={drawMode}
+                onDrawComplete={() => setDrawMode('select')}
               />
               <p className="text-[10px] text-gray-400 text-center mt-2">
-                Blue = placement slot · Orange = crop frame (normalised 0..1)
+                Blue = subject slot · Green = text zone
               </p>
             </div>
           </div>
@@ -218,7 +237,7 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
           <div className="w-72 border-l border-gray-200 flex flex-col overflow-hidden">
             <div className="flex-1 overflow-y-auto p-4 space-y-5">
 
-              {/* Metadata */}
+              {/* Layout Metadata */}
               <section>
                 <h3 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">
                   Layout Metadata
@@ -273,12 +292,15 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
                     Subject Slots
                     <span className="ml-1 bg-blue-100 text-blue-700 px-1 rounded text-[9px]">{slots.length}</span>
                   </h3>
-                  <button onClick={addSlot} className="text-xs text-blue-600 hover:underline">+ Add</button>
+                  <button onClick={() => addSlot()} className="text-xs text-blue-600 hover:underline">+ Add</button>
                 </div>
+                <p className="text-[10px] text-gray-400 mb-2">
+                  Use ▣ / ⬭ / ⬡ toolbar buttons to draw rect, ellipse, or polygon slots.
+                </p>
                 <div className="space-y-2">
                   {slots.map((s, i) => (
                     <SlotRow
-                      key={s.id + i}
+                      key={i}
                       slot={s}
                       index={i}
                       onChange={updated => setSlots(prev => prev.map((x, j) => j === i ? updated : x))}
@@ -291,44 +313,34 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
                 </div>
               </section>
 
-              {/* Crop Frames */}
+              {/* Text Zones */}
               <section>
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
-                    Crop Frames
-                    <span className="ml-1 bg-orange-100 text-orange-700 px-1 rounded text-[9px]">{cropFrames.length}</span>
+                    Text Zones
+                    <span className="ml-1 bg-emerald-100 text-emerald-700 px-1 rounded text-[9px]">{textZones.length}</span>
                   </h3>
-                  <button onClick={addCropFrame} className="text-xs text-orange-600 hover:underline">+ Add</button>
+                  <button onClick={addTextZone} className="text-xs text-emerald-600 hover:underline">+ Add</button>
                 </div>
+                <p className="text-[10px] text-gray-400 mb-2">
+                  Safe areas for title, subtitle and footer text layers.
+                </p>
                 <div className="space-y-2">
-                  {cropFrames.map((cf, i) => (
-                    <CropRow
-                      key={cf.id + i}
-                      cf={cf}
+                  {textZones.map((z, i) => (
+                    <TextZoneRow
+                      key={i}
+                      zone={z}
                       index={i}
-                      onChange={updated => setCropFrames(prev => prev.map((x, j) => j === i ? updated : x))}
-                      onDelete={() => setCropFrames(prev => prev.filter((_, j) => j !== i))}
+                      onChange={updated => setTextZones(prev => prev.map((x, j) => j === i ? updated : x))}
+                      onDelete={() => setTextZones(prev => prev.filter((_, j) => j !== i))}
                     />
                   ))}
-                  {cropFrames.length === 0 && (
-                    <p className="text-xs text-gray-400 text-center py-2">No crop frames — click + Add</p>
+                  {textZones.length === 0 && (
+                    <p className="text-xs text-gray-400 text-center py-2">No text zones — click + Add</p>
                   )}
                 </div>
               </section>
 
-              {/* Text zones JSON */}
-              <section>
-                <h3 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">
-                  Text Zones JSON
-                </h3>
-                <textarea
-                  value={textZonesJson}
-                  onChange={e => setTextZonesJson(e.target.value)}
-                  rows={4}
-                  placeholder="[]"
-                  className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs font-mono resize-y"
-                />
-              </section>
             </div>
           </div>
         </div>

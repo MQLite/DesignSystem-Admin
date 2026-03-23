@@ -7,7 +7,6 @@ export interface BackgroundLayout {
   heightMm: number
   orientation: string
   subjectSlotsJson: string
-  subjectCropFramesJson: string | null
   textZonesJson: string | null
   version: number
 }
@@ -23,32 +22,38 @@ export interface Background {
 
 // ── Visual editor rect types ──────────────────────────────────────────────────
 
-/** A placement slot — where the subject image lands on the final canvas (normalised 0..1). */
-export interface SlotRect {
+/** A text zone — safe area for a text layer on the final canvas (normalised 0..1). */
+export interface TextZoneRect {
   id: string
   x: number
   y: number
   w: number
   h: number
+}
+
+/** Mask shape of a subject slot. */
+export type SlotShape = 'rect' | 'ellipse' | 'polygon'
+
+/** A placement slot — where the subject image lands on the final canvas (normalised 0..1). */
+export interface SlotRect {
+  id: string
+  /** Mask shape; defaults to "rect" when omitted. */
+  shape: SlotShape
+  x: number
+  y: number
+  w: number
+  h: number
+  /**
+   * Polygon vertices in canvas-normalised [x, y] pairs.
+   * Required when shape === "polygon". The bounding box (x/y/w/h) is derived from these.
+   */
+  points?: [number, number][]
   anchor: string
   fitMode: string
   allowUserMove: boolean
   allowUserScale: boolean
   minScale: number
   maxScale: number
-}
-
-/** A crop frame — the window shown to the user when they pan/zoom their photo (normalised 0..1). */
-export interface CropFrameRect {
-  id: string
-  x: number
-  y: number
-  w: number
-  h: number
-  shape: string
-  aspectRatio: number | null
-  allowUserMove: boolean
-  allowUserScale: boolean
 }
 
 // ── API request types ─────────────────────────────────────────────────────────
@@ -69,7 +74,6 @@ export interface CreateLayoutRequest {
   heightMm: number
   orientation: string
   subjectSlotsJson: string
-  subjectCropFramesJson: string | null
   textZonesJson: string | null
 }
 
@@ -79,6 +83,5 @@ export interface UpdateLayoutRequest {
   heightMm: number
   orientation: string
   subjectSlotsJson: string
-  subjectCropFramesJson: string | null
   textZonesJson: string | null
 }

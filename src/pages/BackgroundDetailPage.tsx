@@ -21,11 +21,6 @@ const DEFAULT_SLOTS = JSON.stringify([{
   allowUserMove: true, allowUserScale: true, minScale: 0.8, maxScale: 1.4,
 }])
 
-const DEFAULT_CROP = JSON.stringify([{
-  id: 'main-crop', x: 0.20, y: 0.10, w: 0.60, h: 0.70,
-  shape: 'rect', aspectRatio: 0.857, allowUserMove: true, allowUserScale: true,
-}])
-
 export default function BackgroundDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -36,6 +31,7 @@ export default function BackgroundDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [imgCacheBust, setImgCacheBust] = useState(() => Date.now())
 
   // Metadata form
   const [name, setName] = useState('')
@@ -80,16 +76,19 @@ export default function BackgroundDetailPage() {
     }
   }
 
-  async function handleImageUpload(file: File) {
+  async function handleImageUpload(file: File, input: HTMLInputElement) {
     if (!bg) return
     setUploading(true)
     try {
       const updated = await uploadBackgroundImage(bg.id, file)
       setBg(prev => prev ? { ...prev, sourcePath: updated.sourcePath, previewPath: updated.previewPath } : prev)
+      setImgCacheBust(Date.now())
     } catch (e) {
       setError((e as Error).message)
     } finally {
       setUploading(false)
+      // Reset so the same file can be re-selected if needed
+      input.value = ''
     }
   }
 
@@ -109,7 +108,6 @@ export default function BackgroundDetailPage() {
       const layout = await createLayout(bg.id, {
         sizeCode: 'A3', widthMm: 297, heightMm: 420, orientation: 'Portrait',
         subjectSlotsJson: DEFAULT_SLOTS,
-        subjectCropFramesJson: DEFAULT_CROP,
         textZonesJson: null,
       })
       setBg(prev => prev ? { ...prev, layouts: [...prev.layouts, layout] } : prev)
@@ -165,7 +163,7 @@ export default function BackgroundDetailPage() {
         <div>
           <div className="relative aspect-[3/4] bg-gray-100 rounded-xl overflow-hidden border border-gray-200">
             {bg.previewPath ? (
-              <img src={`/${bg.previewPath}`} alt={bg.name} className="w-full h-full object-cover" />
+              <img src={`/${bg.previewPath}?t=${imgCacheBust}`} alt={bg.name} className="w-full h-full object-cover" />
             ) : (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-300 gap-2">
                 <span className="text-5xl">🖼️</span>
@@ -183,7 +181,7 @@ export default function BackgroundDetailPage() {
             type="file"
             accept="image/*"
             className="hidden"
-            onChange={e => e.target.files?.[0] && handleImageUpload(e.target.files[0])}
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleImageUpload(f, e.target) }}
           />
           <button
             onClick={() => fileInputRef.current?.click()}
@@ -261,7 +259,7 @@ export default function BackgroundDetailPage() {
 
             {bg.layouts.length === 0 ? (
               <p className="text-sm text-gray-400 py-4 text-center">
-                No layouts yet. Add one to define placement slots and crop frames.
+                No layouts yet. Add one to define subject placement slots.
               </p>
             ) : (
               <div className="space-y-2">
@@ -279,8 +277,7 @@ export default function BackgroundDetailPage() {
                       </p>
                       <p className="text-[10px] text-gray-400 mt-0.5">
                         v{layout.version} ·{' '}
-                        {tryParseCount(layout.subjectSlotsJson)} slot(s) ·{' '}
-                        {tryParseCount(layout.subjectCropFramesJson)} crop frame(s)
+                        {tryParseCount(layout.subjectSlotsJson)} slot(s)
                       </p>
                     </div>
                     <div className="flex gap-1.5 flex-shrink-0">
