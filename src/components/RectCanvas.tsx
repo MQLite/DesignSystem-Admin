@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { SlotRect, SlotShape, TextZoneRect } from '../types'
+import type { BgCrop, SlotRect, SlotShape, TextZoneRect } from '../types'
 
 interface Props {
   imageUrl: string | null
@@ -13,6 +13,9 @@ interface Props {
   drawMode: 'select' | 'rect' | 'ellipse' | 'polygon'
   /** Called after a new shape is drawn so parent can switch back to 'select'. */
   onDrawComplete: () => void
+  /** Background crop transform (scale + pan). Default: scale=1, centred. */
+  bgCrop: BgCrop
+  onBgCropChange: (crop: BgCrop) => void
 }
 
 type RectKind = 'slot' | 'text'
@@ -57,14 +60,20 @@ export default function RectCanvas({
   imageUrl, aspectRatio, slots, textZones,
   onSlotsChange, onTextZonesChange,
   drawMode, onDrawComplete,
+  bgCrop, onBgCropChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const svgRef       = useRef<SVGSVGElement>(null)
   const [size, setSize]       = useState({ w: 0, h: 0 })
   const [selected, setSelected] = useState<{ kind: RectKind; id: string } | null>(null)
   const [draft, setDraft]     = useState<Draft>(null)
-  const draftRef = useRef<Draft>(null)
-  const dragRef  = useRef<ActiveDrag | null>(null)
+  const draftRef   = useRef<Draft>(null)
+  const dragRef    = useRef<ActiveDrag | null>(null)
+  const bgCropRef  = useRef(bgCrop)
+  bgCropRef.current = bgCrop
+
+  // bg pan drag state
+  const bgDragRef = useRef({ active: false, startX: 0, startY: 0, startOx: 0, startOy: 0, hasMoved: false })
 
   function updateDraft(d: Draft) {
     draftRef.current = d
@@ -79,6 +88,20 @@ export default function RectCanvas({
     setSize({ w: el.offsetWidth, h: el.offsetHeight })
     return () => ro.disconnect()
   }, [])
+
+  // Scroll wheel → zoom background (select mode only)
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const handler = (e: WheelEvent) => {
+      if (drawMode !== 'select') return
+      e.preventDefault()
+      const delta = e.deltaY > 0 ? -0.08 : 0.08
+      onBgCropChange({ ...bgCropRef.current, scale: Math.max(0.1, Math.min(10, bgCropRef.current.scale + delta)) })
+    }
+    el.addEventListener('wheel', handler, { passive: false })
+    return () => el.removeEventListener('wheel', handler)
+  }, [drawMode, onBgCropChange])
 
   // Discard any in-progress draft when switching draw mode
   useEffect(() => { updateDraft(null) }, [drawMode])
@@ -122,6 +145,21 @@ export default function RectCanvas({
   // ── Pointer move ──────────────────────────────────────────────────────────
 
   function handlePointerMove(e: React.PointerEvent) {
+    // bg pan drag
+    const bd = bgDragRef.current
+    if (bd.active) {
+      const rect = svgRef.current!.getBoundingClientRect()
+      const dx = e.clientX - bd.startX
+      const dy = e.clientY - bd.startY
+      if (Math.hypot(dx, dy) > 3) bd.hasMoved = true
+      onBgCropChange({
+        ...bgCropRef.current,
+        offsetX: bd.startOx + dx / rect.width,
+        offsetY: bd.startOy + dy / rect.height,
+      })
+      return
+    }
+
     const [nx, ny] = toNorm(e)
 
     // Rect/ellipse draw preview
@@ -178,6 +216,13 @@ export default function RectCanvas({
   // ── Pointer up ────────────────────────────────────────────────────────────
 
   function handlePointerUp(_e: React.PointerEvent) {
+    // End bg drag; if no movement treat as click-to-deselect
+    const bd = bgDragRef.current
+    if (bd.active) {
+      if (!bd.hasMoved) setSelected(null)
+      bd.active = false
+    }
+
     const d = draftRef.current
     if (d && (d.mode === 'rect' || d.mode === 'ellipse')) {
       const x0 = Math.min(d.nx0, d.nx1), x1 = Math.max(d.nx0, d.nx1)
@@ -201,11 +246,21 @@ export default function RectCanvas({
     dragRef.current = null
   }
 
-  // ── SVG pointer down — start draw or deselect ─────────────────────────────
+  // ── SVG pointer down — start draw, bg pan, or deselect ───────────────────
 
   function handleSvgPointerDown(e: React.PointerEvent) {
     if (drawMode === 'select') {
-      if (e.target === svgRef.current) setSelected(null)
+      if (e.target === svgRef.current) {
+        // Start bg pan drag; deselect only if no meaningful drag occurs
+        bgDragRef.current = {
+          active: true,
+          startX: e.clientX, startY: e.clientY,
+          startOx: bgCropRef.current.offsetX,
+          startOy: bgCropRef.current.offsetY,
+          hasMoved: false,
+        }
+        svgRef.current?.setPointerCapture(e.pointerId)
+      }
       return
     }
     if (drawMode === 'polygon') return // polygon handled via onClick
@@ -446,20 +501,31 @@ export default function RectCanvas({
 
   const svgCursor = drawMode === 'select' ? 'default' : 'crosshair'
 
+  const bgImgTransform = size.w > 0
+    ? `translate(-50%, -50%) translate(${bgCrop.offsetX * size.w}px, ${bgCrop.offsetY * size.h}px) scale(${bgCrop.scale})`
+    : undefined
+
   return (
     <div
       ref={containerRef}
-      style={{ aspectRatio: String(aspectRatio), position: 'relative' }}
-      className="w-full overflow-hidden rounded-lg border border-gray-300 bg-gray-100 select-none"
+      className="w-full overflow-hidden rounded-lg select-none bg-gray-100"
+      style={{ aspectRatio: String(aspectRatio), position: 'relative', boxShadow: '0 0 0 2px #cbd5e1, 0 4px 24px 0 rgba(0,0,0,0.18)' }}
     >
       {imageUrl ? (
         <img
           src={imageUrl}
           alt=""
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none' }}
+          style={{
+            position: 'absolute', top: '50%', left: '50%',
+            minWidth: '100%', minHeight: '100%',
+            width: 'auto', height: 'auto', maxWidth: 'none',
+            transform: bgImgTransform,
+            transformOrigin: 'center center',
+            pointerEvents: 'none',
+          }}
         />
       ) : (
-        <div className="absolute inset-0 flex items-center justify-center text-gray-300 text-xs">
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-50 text-gray-300 text-xs">
           No image uploaded
         </div>
       )}

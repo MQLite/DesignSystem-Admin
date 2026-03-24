@@ -1,5 +1,12 @@
 export type OccasionType = 'Funeral' | 'Birthday' | 'Others'
 
+/** Admin-defined background crop transform stored per layout. */
+export interface BgCrop {
+  scale: number    // 1.0 = cover-fit; > 1 zooms in
+  offsetX: number  // fraction of canvas width; 0 = centred
+  offsetY: number  // fraction of canvas height; 0 = centred
+}
+
 export interface BackgroundLayout {
   id: string
   sizeCode: string
@@ -8,6 +15,7 @@ export interface BackgroundLayout {
   orientation: string
   subjectSlotsJson: string
   textZonesJson: string | null
+  bgCropJson?: string | null
   version: number
 }
 
@@ -84,4 +92,5 @@ export interface UpdateLayoutRequest {
   orientation: string
   subjectSlotsJson: string
   textZonesJson: string | null
+  bgCropJson: string | null
 }

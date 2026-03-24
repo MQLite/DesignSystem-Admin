@@ -1,6 +1,13 @@
 import { useState } from 'react'
-import type { BackgroundLayout, SlotRect, SlotShape, TextZoneRect, UpdateLayoutRequest } from '../types'
+import type { BackgroundLayout, BgCrop, SlotRect, SlotShape, TextZoneRect, UpdateLayoutRequest } from '../types'
 import RectCanvas from './RectCanvas'
+
+const DEFAULT_BG_CROP: BgCrop = { scale: 1, offsetX: 0, offsetY: 0 }
+
+function parseBgCrop(json: string | null | undefined): BgCrop {
+  if (!json) return DEFAULT_BG_CROP
+  try { return { ...DEFAULT_BG_CROP, ...JSON.parse(json) } } catch { return DEFAULT_BG_CROP }
+}
 
 type DrawMode = 'select' | 'rect' | 'ellipse' | 'polygon'
 
@@ -131,6 +138,7 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
   const [saving, setSaving]     = useState(false)
   const [error, setError]       = useState<string | null>(null)
   const [drawMode, setDrawMode] = useState<DrawMode>('select')
+  const [bgCrop, setBgCrop]     = useState<BgCrop>(() => parseBgCrop(layout.bgCropJson))
 
   const aspectRatio = widthMm / heightMm
 
@@ -145,6 +153,7 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
         orientation,
         subjectSlotsJson: JSON.stringify(slots),
         textZonesJson: textZones.length > 0 ? JSON.stringify(textZones) : null,
+        bgCropJson: JSON.stringify(bgCrop),
       })
     } catch (e) {
       setError((e as Error).message)
@@ -226,9 +235,14 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
                 onTextZonesChange={setTextZones}
                 drawMode={drawMode}
                 onDrawComplete={() => setDrawMode('select')}
+                bgCrop={bgCrop}
+                onBgCropChange={setBgCrop}
               />
               <p className="text-[10px] text-gray-400 text-center mt-2">
-                Blue = subject slot · Green = text zone
+                {sizeCode} {orientation} — {widthMm}×{heightMm} mm
+              </p>
+              <p className="text-[10px] text-gray-400 text-center">
+                Blue = subject slot · Green = text zone · drag empty area to pan bg
               </p>
             </div>
           </div>
@@ -281,6 +295,55 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
                       <option>Portrait</option>
                       <option>Landscape</option>
                     </select>
+                  </div>
+                </div>
+              </section>
+
+              {/* Background Crop */}
+              <section>
+                <h3 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">
+                  Background Crop
+                </h3>
+                <p className="text-[10px] text-gray-400 mb-2">
+                  Drag canvas to pan · scroll wheel to zoom
+                </p>
+                <div className="p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-xs space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-400 w-12 flex-shrink-0">Scale</span>
+                    <button
+                      onClick={() => setBgCrop(c => ({ ...c, scale: Math.max(0.1, c.scale - 0.1) }))}
+                      className="w-6 h-6 rounded bg-gray-200 hover:bg-gray-300 font-bold flex items-center justify-center flex-shrink-0"
+                    >−</button>
+                    <input
+                      type="range" min={0.1} max={5} step={0.05}
+                      value={bgCrop.scale}
+                      onChange={e => setBgCrop(c => ({ ...c, scale: Number(e.target.value) }))}
+                      className="flex-1 accent-indigo-500"
+                    />
+                    <button
+                      onClick={() => setBgCrop(c => ({ ...c, scale: Math.min(5, c.scale + 0.1) }))}
+                      className="w-6 h-6 rounded bg-gray-200 hover:bg-gray-300 font-bold flex items-center justify-center flex-shrink-0"
+                    >+</button>
+                    <input
+                      type="number"
+                      min={10} max={500} step={1}
+                      value={Math.round(bgCrop.scale * 100)}
+                      onChange={e => {
+                        const pct = Number(e.target.value)
+                        if (!isNaN(pct) && pct >= 10 && pct <= 500)
+                          setBgCrop(c => ({ ...c, scale: pct / 100 }))
+                      }}
+                      className="w-14 px-1 py-0.5 border border-gray-300 rounded text-xs font-mono text-right flex-shrink-0"
+                    />
+                    <span className="text-gray-400 flex-shrink-0">%</span>
+                  </div>
+                  <div className="flex items-center justify-between text-gray-400 font-mono text-[10px]">
+                    <span>x: {bgCrop.offsetX.toFixed(3)}</span>
+                    <span>y: {bgCrop.offsetY.toFixed(3)}</span>
+                    <button
+                      onClick={() => setBgCrop(DEFAULT_BG_CROP)}
+                      className="text-red-400 hover:text-red-600 text-[10px] ml-2"
+                    >Reset</button>
                   </div>
                 </div>
               </section>
