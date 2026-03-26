@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { BackgroundLayout, BgCrop, SlotRect, SlotShape, TextZoneRect, UpdateLayoutRequest } from '../types'
 import RectCanvas from './RectCanvas'
 
@@ -99,6 +99,173 @@ const FONT_FAMILIES = [
   'Courier New', 'Verdana', 'Trebuchet MS', 'Impact',
 ]
 
+// ── Text Zone Editor Modal (CorelDraw-style) ──────────────────────────────────
+
+function TextZoneEditorModal({
+  zone,
+  onSave,
+  onClose,
+}: {
+  zone: TextZoneRect
+  onSave: (updates: Pick<TextZoneRect, 'defaultText' | 'fontFamily' | 'fontSize' | 'align'>) => void
+  onClose: () => void
+}) {
+  const [text,       setText]       = useState(zone.defaultText ?? '')
+  const [fontFamily, setFontFamily] = useState(zone.fontFamily  ?? 'Arial')
+  const [fontSize,   setFontSize]   = useState(zone.fontSize    ?? 50)
+  const [align,      setAlign]      = useState<'left' | 'center' | 'right'>(zone.align ?? 'center')
+  const taRef = useRef<HTMLTextAreaElement>(null)
+
+  // Preview font px: treat preview box as 100 px tall → fontPx = fontSize/100*100
+  const previewFontPx = Math.max(10, fontSize)
+
+  function handleSave() {
+    onSave({
+      defaultText: text || undefined,
+      fontFamily,
+      fontSize,
+      align,
+    })
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.45)' }}
+      onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div
+        className="bg-white rounded-2xl shadow-2xl flex flex-col"
+        style={{ width: 520, maxHeight: '90vh' }}
+        onMouseDown={e => e.stopPropagation()}
+      >
+        {/* ── Header ── */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+          <span className="font-semibold text-gray-800 text-sm">
+            文字编辑
+            <span className="ml-2 text-[11px] text-gray-400 font-normal">zone: {zone.id}</span>
+          </span>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">✕</button>
+        </div>
+
+        {/* ── Toolbar ── */}
+        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-100 bg-gray-50 flex-wrap">
+          {/* Font family */}
+          <select
+            value={fontFamily}
+            onChange={e => setFontFamily(e.target.value)}
+            style={{ fontFamily }}
+            className="px-2 py-1 border border-gray-300 rounded text-xs bg-white focus:outline-none focus:ring-1 focus:ring-emerald-400"
+          >
+            {FONT_FAMILIES.map(f => (
+              <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>
+            ))}
+          </select>
+
+          {/* Font size */}
+          <div className="flex items-center gap-1">
+            <input
+              type="number" min={20} max={150} step={1}
+              value={fontSize}
+              onChange={e => setFontSize(Math.max(20, Math.min(150, Number(e.target.value))))}
+              className="w-14 px-1.5 py-1 border border-gray-300 rounded text-xs font-mono text-center focus:outline-none focus:ring-1 focus:ring-emerald-400"
+            />
+            <span className="text-[10px] text-gray-400">%</span>
+          </div>
+
+          {/* Font size slider */}
+          <input
+            type="range" min={20} max={150} step={1}
+            value={fontSize}
+            onChange={e => setFontSize(Number(e.target.value))}
+            className="w-24 accent-emerald-500"
+          />
+
+          {/* Align */}
+          <div className="flex gap-0.5 ml-auto">
+            {(['left', 'center', 'right'] as const).map(a => (
+              <button
+                key={a}
+                onClick={() => setAlign(a)}
+                title={a}
+                className={`w-7 h-7 rounded text-xs border transition-colors ${
+                  align === a
+                    ? 'bg-emerald-600 text-white border-emerald-600'
+                    : 'text-gray-500 border-gray-300 hover:bg-gray-100'
+                }`}
+              >
+                {a === 'left' ? '⬅' : a === 'right' ? '➡' : '↔'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* ── Text input area ── */}
+        <div className="px-4 pt-4 pb-2 flex-1 overflow-auto">
+          <textarea
+            ref={taRef}
+            value={text}
+            onChange={e => setText(e.target.value)}
+            placeholder="在此输入默认文字…"
+            rows={4}
+            autoFocus
+            style={{
+              fontFamily,
+              fontSize: Math.max(14, Math.min(32, previewFontPx * 0.5)),
+              textAlign: align,
+              resize: 'vertical',
+            }}
+            className="w-full px-3 py-2.5 border-2 border-emerald-300 rounded-lg text-gray-800
+                       focus:outline-none focus:border-emerald-500 bg-white leading-relaxed"
+          />
+        </div>
+
+        {/* ── Live preview ── */}
+        <div className="px-4 pb-3">
+          <p className="text-[10px] text-gray-400 mb-1 font-medium uppercase tracking-wide">预览</p>
+          <div
+            className="w-full rounded-lg border border-gray-200 overflow-hidden flex items-center justify-center"
+            style={{ height: 80, background: '#1a1a2e' }}
+          >
+            <span
+              style={{
+                fontFamily,
+                fontSize: previewFontPx,
+                textAlign: align,
+                display: 'block',
+                width: '100%',
+                padding: '0 12px',
+                color: zone.color ?? '#ffffff',
+                WebkitTextStroke: (zone.strokeWidth ?? 0) > 0
+                  ? `${Math.max(0.5, previewFontPx * (zone.strokeWidth ?? 0) / 100)}px ${zone.strokeColor ?? '#000000'}`
+                  : undefined,
+                fontWeight: zone.id === 'title' ? 'bold' : 'normal',
+                lineHeight: 1.2,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+              }}
+            >
+              {text || <span style={{ opacity: 0.3 }}>{zone.id}</span>}
+            </span>
+          </div>
+        </div>
+
+        {/* ── Footer ── */}
+        <div className="flex justify-end gap-2 px-4 py-3 border-t border-gray-200">
+          <button
+            onClick={onClose}
+            className="px-4 py-1.5 text-sm text-gray-600 rounded-lg hover:bg-gray-100"
+          >取消</button>
+          <button
+            onClick={handleSave}
+            className="px-5 py-1.5 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700"
+          >确认</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function TextZoneRow({
   zone, index, onChange, onDelete, onStartArcDraw,
 }: {
@@ -108,12 +275,18 @@ function TextZoneRow({
   onDelete: () => void
   onStartArcDraw: () => void
 }) {
+  const [showEditor, setShowEditor] = useState(false)
+
   return (
+    <>
     <div className="p-2.5 bg-emerald-50 border border-emerald-100 rounded-lg text-xs space-y-1.5">
+      {/* Header row */}
       <div className="flex items-center justify-between">
         <span className="font-medium text-emerald-800">Text Zone {index + 1}</span>
         <button onClick={onDelete} className="text-red-400 hover:text-red-600">✕</button>
       </div>
+
+      {/* ID */}
       <div>
         <label className="block text-gray-400 mb-0.5">ID</label>
         <input
@@ -122,77 +295,47 @@ function TextZoneRow({
           className="w-full px-1.5 py-0.5 border border-emerald-200 rounded text-xs"
         />
       </div>
+
+      {/* Position readout */}
       <div className="grid grid-cols-2 gap-1 text-gray-500 font-mono">
         <span>x: {zone.x.toFixed(3)}</span>
         <span>y: {zone.y.toFixed(3)}</span>
         <span>w: {zone.w.toFixed(3)}</span>
         <span>h: {zone.h.toFixed(3)}</span>
       </div>
-      {/* Default text */}
-      <div>
-        <label className="block text-gray-400 mb-0.5">Default Text</label>
-        <input
-          value={zone.defaultText ?? ''}
-          onChange={e => onChange({ ...zone, defaultText: e.target.value || undefined })}
-          placeholder="Pre-filled text for end users"
-          className="w-full px-1.5 py-0.5 border border-emerald-200 rounded text-xs"
-        />
-      </div>
-      {/* Font family */}
-      <div>
-        <label className="block text-gray-400 mb-0.5">Font Family</label>
-        <select
-          value={zone.fontFamily ?? 'Arial'}
-          onChange={e => onChange({ ...zone, fontFamily: e.target.value })}
-          className="w-full px-1 py-0.5 border border-emerald-200 rounded text-xs"
+
+      {/* Text / typography — summary + edit button */}
+      <div className="flex items-center justify-between pt-0.5">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          <span
+            className="truncate text-gray-600 italic"
+            style={{ fontFamily: zone.fontFamily ?? 'Arial', maxWidth: 120 }}
+          >
+            {zone.defaultText || <span className="text-gray-300 not-italic">无默认文字</span>}
+          </span>
+          <span className="text-[10px] text-gray-400 flex-shrink-0">
+            {zone.fontFamily ?? 'Arial'} · {zone.fontSize ?? 50}%
+          </span>
+        </div>
+        <button
+          onClick={() => setShowEditor(true)}
+          className="flex-shrink-0 ml-2 px-2.5 py-1 bg-emerald-600 text-white text-[10px] font-medium rounded hover:bg-emerald-700"
         >
-          {FONT_FAMILIES.map(f => <option key={f}>{f}</option>)}
-        </select>
+          编辑文字
+        </button>
       </div>
-      {/* Font size */}
-      <div>
-        <label className="block text-gray-400 mb-0.5">Font Size — % of zone height</label>
-        <div className="flex items-center gap-1.5">
+
+      {/* Color (unchanged) */}
+      <div className="pt-1 border-t border-emerald-100">
+        <label className="block text-gray-400 mb-0.5">Color</label>
+        <div className="flex items-center gap-1">
           <input
-            type="range" min={20} max={150} step={1}
-            value={zone.fontSize ?? 50}
-            onChange={e => onChange({ ...zone, fontSize: Number(e.target.value) })}
-            className="flex-1 accent-emerald-500"
+            type="color"
+            value={zone.color ?? '#ffffff'}
+            onChange={e => onChange({ ...zone, color: e.target.value })}
+            className="w-6 h-6 rounded border-0 p-0 cursor-pointer"
           />
-          <span className="w-7 text-right font-mono text-gray-600">{zone.fontSize ?? 50}</span>
-        </div>
-      </div>
-      {/* Color + Align */}
-      <div className="grid grid-cols-2 gap-1.5">
-        <div>
-          <label className="block text-gray-400 mb-0.5">Color</label>
-          <div className="flex items-center gap-1">
-            <input
-              type="color"
-              value={zone.color ?? '#ffffff'}
-              onChange={e => onChange({ ...zone, color: e.target.value })}
-              className="w-6 h-6 rounded border-0 p-0 cursor-pointer"
-            />
-            <span className="font-mono text-gray-500 text-[10px]">{zone.color ?? '#ffffff'}</span>
-          </div>
-        </div>
-        <div>
-          <label className="block text-gray-400 mb-0.5">Align</label>
-          <div className="flex gap-0.5">
-            {(['left', 'center', 'right'] as const).map(a => (
-              <button
-                key={a}
-                onClick={() => onChange({ ...zone, align: a })}
-                className={`flex-1 py-0.5 rounded text-[10px] border ${
-                  (zone.align ?? 'center') === a
-                    ? 'bg-emerald-600 text-white border-emerald-600'
-                    : 'text-gray-500 border-emerald-200 hover:bg-emerald-100'
-                }`}
-              >
-                {a === 'left' ? 'L' : a === 'right' ? 'R' : 'C'}
-              </button>
-            ))}
-          </div>
+          <span className="font-mono text-gray-500 text-[10px]">{zone.color ?? '#ffffff'}</span>
         </div>
       </div>
       {/* Stroke width */}
@@ -297,6 +440,16 @@ function TextZoneRow({
         </>
       )}
     </div>
+
+    {/* Text editor popup */}
+    {showEditor && (
+      <TextZoneEditorModal
+        zone={zone}
+        onSave={updates => { onChange({ ...zone, ...updates }); setShowEditor(false) }}
+        onClose={() => setShowEditor(false)}
+      />
+    )}
+    </>
   )
 }
 
