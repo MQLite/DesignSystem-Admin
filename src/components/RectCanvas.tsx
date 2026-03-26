@@ -16,6 +16,10 @@ interface Props {
   /** Background crop transform (scale + pan). Default: scale=1, centred. */
   bgCrop: BgCrop
   onBgCropChange: (crop: BgCrop) => void
+  /** When set, the canvas is in "draw arc circle" mode for this zone id. */
+  arcDrawZoneId?: string | null
+  /** Called when the arc draw interaction finishes (committed or cancelled). */
+  onArcDrawComplete?: () => void
 }
 
 type RectKind = 'slot' | 'text'
@@ -56,11 +60,16 @@ function dist2d(a: [number, number], b: [number, number]): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1])
 }
 
+/** Arc ellipse drag: cx/cy in SVG-relative pixels, rx/ry in pixels */
+interface ArcDraft { cx: number; cy: number; rx: number; ry: number }
+
 export default function RectCanvas({
   imageUrl, aspectRatio, slots, textZones,
   onSlotsChange, onTextZonesChange,
   drawMode, onDrawComplete,
   bgCrop, onBgCropChange,
+  arcDrawZoneId = null,
+  onArcDrawComplete = () => {},
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const svgRef       = useRef<SVGSVGElement>(null)
@@ -71,6 +80,28 @@ export default function RectCanvas({
   const dragRef    = useRef<ActiveDrag | null>(null)
   const bgCropRef  = useRef(bgCrop)
   bgCropRef.current = bgCrop
+
+  // Arc circle draw state
+  // arcDraft   = circle being actively dragged (live preview)
+  // arcPending = circle drawn but awaiting user confirm/cancel
+  const [arcDraft,   setArcDraft]   = useState<ArcDraft | null>(null)
+  const [arcPending, setArcPending] = useState<ArcDraft | null>(null)
+  const arcDraftRef = useRef<ArcDraft | null>(null)
+  function updateArcDraft(d: ArcDraft | null) { arcDraftRef.current = d; setArcDraft(d) }
+
+  function cancelArcDraw() {
+    updateArcDraft(null)
+    setArcPending(null)
+    onArcDrawComplete()
+  }
+
+  // Cancel arc draw on ESC or when arcDrawZoneId clears
+  useEffect(() => {
+    if (!arcDrawZoneId) { updateArcDraft(null); setArcPending(null); return }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') cancelArcDraw() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [arcDrawZoneId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // bg pan drag state
   const bgDragRef = useRef({ active: false, startX: 0, startY: 0, startOx: 0, startOy: 0, hasMoved: false })
@@ -142,9 +173,41 @@ export default function RectCanvas({
     svgRef.current?.setPointerCapture(e.pointerId)
   }
 
+  // ── Arc circle draw helpers ───────────────────────────────────────────────
+
+  function svgXY(e: { clientX: number; clientY: number }): { x: number; y: number } {
+    const r = svgRef.current!.getBoundingClientRect()
+    return { x: e.clientX - r.left, y: e.clientY - r.top }
+  }
+
+  function commitArcDraw(draft: ArcDraft) {
+    const zone = textZones.find(z => z.id === arcDrawZoneId)
+    if (zone) {
+      const zoneCy = (zone.y + zone.h / 2) * size.h
+      const arcDirection: 'up' | 'down' = draft.cy < zoneCy ? 'up' : 'down'
+      const h = Math.max(1, size.h)
+      const arcRx = Math.max(0.05, draft.rx / h)
+      const arcRy = Math.max(0.05, draft.ry / h)
+      patchZone(arcDrawZoneId!, { arcRx, arcRy, arcDirection })
+    }
+    updateArcDraft(null)
+    setArcPending(null)
+    onArcDrawComplete()
+  }
+
   // ── Pointer move ──────────────────────────────────────────────────────────
 
   function handlePointerMove(e: React.PointerEvent) {
+    // Arc circle draw
+    if (arcDrawZoneId) {
+      const ad = arcDraftRef.current
+      if (ad) {
+        const { x, y } = svgXY(e)
+        updateArcDraft({ ...ad, rx: Math.abs(x - ad.cx), ry: Math.abs(y - ad.cy) })
+      }
+      return
+    }
+
     // bg pan drag
     const bd = bgDragRef.current
     if (bd.active) {
@@ -215,7 +278,21 @@ export default function RectCanvas({
 
   // ── Pointer up ────────────────────────────────────────────────────────────
 
-  function handlePointerUp(_e: React.PointerEvent) {
+  function handlePointerUp(e: React.PointerEvent) {
+    // Arc ellipse: finish drawing → move to pending (waiting for confirm)
+    if (arcDrawZoneId) {
+      const ad = arcDraftRef.current
+      if (ad && (ad.rx >= 8 || ad.ry >= 8)) {
+        setArcPending(ad)
+        updateArcDraft(null)
+      } else {
+        updateArcDraft(null) // too small, discard
+      }
+      return
+    }
+    return _handlePointerUp(e)
+  }
+  function _handlePointerUp(_e: React.PointerEvent) {
     // End bg drag; if no movement treat as click-to-deselect
     const bd = bgDragRef.current
     if (bd.active) {
@@ -249,6 +326,13 @@ export default function RectCanvas({
   // ── SVG pointer down — start draw, bg pan, or deselect ───────────────────
 
   function handleSvgPointerDown(e: React.PointerEvent) {
+    // Arc circle: start drag from click point as center
+    if (arcDrawZoneId) {
+      const { x, y } = svgXY(e)
+      updateArcDraft({ cx: x, cy: y, rx: 0, ry: 0 })
+      svgRef.current?.setPointerCapture(e.pointerId)
+      return
+    }
     if (drawMode === 'select') {
       if (e.target === svgRef.current) {
         // Start bg pan drag; deselect only if no meaningful drag occurs
@@ -410,43 +494,227 @@ export default function RectCanvas({
     )
   }
 
+  function buildArcPath(zone: TextZoneRect, sw: number, sh: number): string {
+    const zx    = zone.x * sw, zy = zone.y * sh
+    const zw    = zone.w * sw, zh = zone.h * sh
+    const cx    = zx + zw / 2, cy = zy + zh / 2
+    const halfW = zw / 2
+    const Rx    = Math.max(halfW + 1, (zone.arcRx ?? 0.7) * sh)
+    const Ry    = Math.max(1,         (zone.arcRy ?? 0.5) * sh)
+    const ratio = Math.min(1, halfW / Rx)
+    const yOff  = Ry * (1 - Math.sqrt(1 - ratio * ratio))
+    const isUp  = (zone.arcDirection ?? 'up') === 'up'
+    const sx = cx - halfW, ex = cx + halfW
+    const sy = isUp ? cy + yOff : cy - yOff
+    const sweep = isUp ? 0 : 1
+    return `M ${sx.toFixed(1)},${sy.toFixed(1)} A ${Rx.toFixed(1)},${Ry.toFixed(1)} 0 0 ${sweep} ${ex.toFixed(1)},${sy.toFixed(1)}`
+  }
+
   function renderTextZone(zone: TextZoneRect) {
     if (size.w === 0) return null
     const isSel = selected?.kind === 'text' && selected?.id === zone.id
     const c = COLORS.text
-    const stroke = isSel ? c.strokeSel : c.stroke
-    const fill   = isSel ? c.fillSel   : c.fill
+    const borderStroke = isSel ? c.strokeSel : c.stroke
+    const fill         = isSel ? c.fillSel   : c.fill
     const ptrStyle = { pointerEvents: (interactive ? 'auto' : 'none') as React.CSSProperties['pointerEvents'] }
+
+    const zx = zone.x * size.w
+    const zy = zone.y * size.h
+    const zw = zone.w * size.w
+    const zh = zone.h * size.h
+
+    // Resolve typography
+    const fontFamily     = zone.fontFamily  ?? 'Arial'
+    const fontSizePct    = zone.fontSize    ?? 50
+    const textColor      = zone.color       ?? '#ffffff'
+    const strokeWidthPct = zone.strokeWidth ?? 0
+    const strokeClr      = zone.strokeColor ?? '#000000'
+    const align          = zone.align       ?? 'center'
+
+    const fontPx     = Math.max(8, zh * fontSizePct / 100)
+    const strokePx   = strokeWidthPct > 0 ? Math.max(0.5, fontPx * strokeWidthPct / 100) : 0
+    const fontWeight = zone.id === 'title' ? 'bold' : 'normal'
+
+    const displayText   = zone.defaultText ?? ''
+    const isPlaceholder = !displayText
+    const label         = displayText || zone.id
+
+    const sharedTextAttrs = {
+      fontFamily, fontWeight,
+      fontSize: fontPx,
+      style: { pointerEvents: 'none' as const, userSelect: 'none' as const },
+      opacity: isPlaceholder ? 0.4 : 1,
+    }
+
+    // ── Compute text bounding box (tight, based on font metrics) ─────────────
+    //
+    // For straight text: text is centred vertically at zone-centre y.
+    //   dominant-baseline="middle" places the em-box centre at textY.
+    //   Approximate: ascent ≈ 0.75·fontPx above middle, descent ≈ 0.25·fontPx below.
+    //
+    // For arc text: baseline lies ON the arc path.
+    //   Arc y ranges from the arc apex (cy, zone centre) to the endpoints (arcSy).
+    //   Ascenders project 0.75·fontPx above the baseline; descenders 0.25·fontPx below.
+
+    const cx = zx + zw / 2, cy = zy + zh / 2
+
+    let tbx: number, tby: number, tbw: number, tbh: number
+
+    if (zone.arcEnabled && arcDrawZoneId !== zone.id) {
+      // Arc text bounding box
+      const halfW = zw / 2
+      const Rx    = Math.max(halfW + 1, (zone.arcRx ?? 0.7) * size.h)
+      const Ry    = Math.max(1,          (zone.arcRy ?? 0.5) * size.h)
+      const ratio = Math.min(1, halfW / Rx)
+      const yOff  = Ry * (1 - Math.sqrt(1 - ratio * ratio))
+      const isUp  = (zone.arcDirection ?? 'up') === 'up'
+      const arcSy = isUp ? cy + yOff : cy - yOff
+
+      // Apex (tightest point of arc) is at y = cy; endpoints at y = arcSy.
+      // For 'up': apex above endpoints (cy < arcSy in screen coords).
+      // For 'down': endpoints above apex (arcSy < cy).
+      const apexY     = cy      // y of arc apex in both cases (it's always zone cy)
+      const endpointY = arcSy
+
+      const topBaseline    = Math.min(apexY, endpointY)
+      const bottomBaseline = Math.max(apexY, endpointY)
+
+      tbx = zx
+      tbw = zw
+      tby = topBaseline    - fontPx * 0.75
+      tbh = (bottomBaseline + fontPx * 0.25) - tby
+    } else {
+      // Straight text bounding box
+      const textY = cy  // dominant-baseline="middle" → em-box centre at zone cy
+      tbx = zx
+      tbw = zw
+      tby = textY - fontPx * 0.5
+      tbh = fontPx
+    }
+
+    // ── Shared rendering helpers ──────────────────────────────────────────────
+
+    // Transparent full-zone rect — provides the drag target area (larger than text bbox)
+    const zoneDragRect = (
+      <rect
+        x={zx} y={zy} width={zw} height={zh}
+        fill="transparent" stroke="none"
+        style={{ ...ptrStyle, cursor: interactive ? 'move' : 'default' }}
+        onPointerDown={e => startDrag('text', zone.id, 'body', e)}
+      />
+    )
+
+    // Tight text bounding box — the visible dashed outline
+    const textBboxRect = (
+      <rect
+        x={tbx} y={tby} width={tbw} height={Math.max(4, tbh)}
+        fill={fill} stroke={borderStroke} strokeWidth={2} strokeDasharray="5,3"
+        style={{ pointerEvents: 'none' }}
+      />
+    )
+
+    // Corner handles always at ZONE corners (resizing the zone = resizing font proportionally)
+    const cornerHandles = interactive && isSel && CORNER_HANDLES.map(([h, hx, hy]) => (
+      <rect key={h}
+        x={hx(zone) * size.w - 5} y={hy(zone) * size.h - 5}
+        width={10} height={10}
+        fill="#fff" stroke={borderStroke} strokeWidth={2} rx={2}
+        style={{ cursor: `${h}-resize` }}
+        onPointerDown={e => startDrag('text', zone.id, h, e)}
+      />
+    ))
+
+    // ── Arc text variant ──────────────────────────────────────────────────────
+    if (zone.arcEnabled && arcDrawZoneId !== zone.id) {
+      const arcPathId = `arcpath-tz-${zone.id}`
+      const arcD      = buildArcPath(zone, size.w, size.h)
+
+      const arcTextContent = (offsetX = 0, offsetY = 0, extraFill?: string) => (
+        <text
+          {...sharedTextAttrs}
+          textAnchor="middle"
+          fill={extraFill ?? textColor}
+          {...(strokePx > 0 && !extraFill ? { stroke: strokeClr, strokeWidth: strokePx, paintOrder: 'stroke' } : {})}
+          transform={offsetX || offsetY ? `translate(${offsetX},${offsetY})` : undefined}
+        >
+          <textPath href={`#${arcPathId}`} startOffset="50%">{label}</textPath>
+        </text>
+      )
+
+      // Ellipse guide (selected only)
+      const arcEllipseGuide = isSel && (() => {
+        const Rx = Math.max(zw / 2 + 1, (zone.arcRx ?? 0.7) * size.h)
+        const Ry = Math.max(1,           (zone.arcRy ?? 0.5) * size.h)
+        const arcUp = (zone.arcDirection ?? 'up') === 'up'
+        return (
+          <ellipse cx={cx} cy={arcUp ? cy + Ry : cy - Ry} rx={Rx} ry={Ry}
+            fill="none" stroke={borderStroke} strokeWidth={1.5}
+            strokeDasharray="6,4" opacity={0.35}
+            style={{ pointerEvents: 'none' }} />
+        )
+      })()
+
+      return (
+        <g
+          key={`text-${zone.id}`}
+          onClick={e => { e.stopPropagation(); if (interactive) setSelected({ kind: 'text', id: zone.id }) }}
+        >
+          {zoneDragRect}
+          {textBboxRect}
+          <defs><path id={arcPathId} d={arcD} /></defs>
+          {strokePx > 0
+            ? arcTextContent()
+            : <>{arcTextContent(1, 1, 'rgba(0,0,0,0.65)')}{arcTextContent()}</>
+          }
+          {arcEllipseGuide}
+          <text x={tbx + 4} y={tby + 11} fontSize={9} fontWeight={600} fill={borderStroke}
+            style={{ pointerEvents: 'none', userSelect: 'none' }}>
+            ⌢ {zone.id}
+          </text>
+          {cornerHandles}
+        </g>
+      )
+    }
+
+    // ── Straight text variant ─────────────────────────────────────────────────
+    const textAnchor = align === 'left' ? 'start' : align === 'right' ? 'end' : 'middle'
+    const textX = align === 'left' ? zx + 4 : align === 'right' ? zx + zw - 4 : cx
+    const textY = cy
 
     return (
       <g
         key={`text-${zone.id}`}
         onClick={e => { e.stopPropagation(); if (interactive) setSelected({ kind: 'text', id: zone.id }) }}
       >
-        <rect
-          x={zone.x * size.w} y={zone.y * size.h}
-          width={zone.w * size.w} height={zone.h * size.h}
-          fill={fill} stroke={stroke} strokeWidth={2} strokeDasharray="5,3"
-          style={{ ...ptrStyle, cursor: interactive ? 'move' : 'default' }}
-          onPointerDown={e => startDrag('text', zone.id, 'body', e)}
-        />
-        <text
-          x={zone.x * size.w + 4} y={zone.y * size.h + 14}
-          fontSize={10} fontWeight={600} fill={stroke}
-          style={{ pointerEvents: 'none', userSelect: 'none' }}
-        >
+        {zoneDragRect}
+        {textBboxRect}
+
+        {strokePx > 0 ? (
+          <text x={textX} y={textY} {...sharedTextAttrs}
+            textAnchor={textAnchor} dominantBaseline="middle"
+            fill={textColor} stroke={strokeClr} strokeWidth={strokePx} paintOrder="stroke">
+            {label}
+          </text>
+        ) : (
+          <>
+            <text x={textX + 1} y={textY + 1} {...sharedTextAttrs}
+              textAnchor={textAnchor} dominantBaseline="middle"
+              fill="rgba(0,0,0,0.65)">
+              {label}
+            </text>
+            <text x={textX} y={textY} {...sharedTextAttrs}
+              textAnchor={textAnchor} dominantBaseline="middle"
+              fill={textColor}>
+              {label}
+            </text>
+          </>
+        )}
+
+        <text x={tbx + 4} y={tby + 11} fontSize={9} fontWeight={600} fill={borderStroke}
+          style={{ pointerEvents: 'none', userSelect: 'none' }}>
           T {zone.id}
         </text>
-        {interactive && isSel && CORNER_HANDLES.map(([h, hx, hy]) => (
-          <rect
-            key={h}
-            x={hx(zone) * size.w - 5} y={hy(zone) * size.h - 5}
-            width={10} height={10}
-            fill="#fff" stroke={stroke} strokeWidth={2} rx={2}
-            style={{ cursor: `${h}-resize` }}
-            onPointerDown={e => startDrag('text', zone.id, h, e)}
-          />
-        ))}
+        {cornerHandles}
       </g>
     )
   }
@@ -499,11 +767,10 @@ export default function RectCanvas({
     return null
   }
 
-  const svgCursor = drawMode === 'select' ? 'default' : 'crosshair'
+  const svgCursor = arcDrawZoneId ? 'crosshair' : drawMode === 'select' ? 'default' : 'crosshair'
 
-  const bgImgTransform = size.w > 0
-    ? `translate(-50%, -50%) translate(${bgCrop.offsetX * size.w}px, ${bgCrop.offsetY * size.h}px) scale(${bgCrop.scale})`
-    : undefined
+  const bgImgTransform =
+    `translate(${bgCrop.offsetX * 100}%, ${bgCrop.offsetY * 100}%) scale(${bgCrop.scale})`
 
   return (
     <div
@@ -516,9 +783,9 @@ export default function RectCanvas({
           src={imageUrl}
           alt=""
           style={{
-            position: 'absolute', top: '50%', left: '50%',
-            minWidth: '100%', minHeight: '100%',
-            width: 'auto', height: 'auto', maxWidth: 'none',
+            position: 'absolute', inset: 0,
+            width: '100%', height: '100%',
+            objectFit: 'contain',
             transform: bgImgTransform,
             transformOrigin: 'center center',
             pointerEvents: 'none',
@@ -530,9 +797,20 @@ export default function RectCanvas({
         </div>
       )}
 
+      {/* Dim overlay while in arc draw mode */}
+      {arcDrawZoneId && (
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'rgba(0,0,0,0.52)',
+          borderRadius: 8,
+          pointerEvents: 'none',
+          zIndex: 1,
+        }} />
+      )}
+
       <svg
         ref={svgRef}
-        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', cursor: svgCursor, overflow: 'visible' }}
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', cursor: svgCursor, overflow: 'visible', zIndex: 2 }}
         onPointerDown={handleSvgPointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -541,8 +819,83 @@ export default function RectCanvas({
       >
         {textZones.map(renderTextZone)}
         {slots.map(renderSlot)}
-        {renderDraft()}
+        {!arcDrawZoneId && renderDraft()}
+
+        {/* Arc live drag preview */}
+        {arcDrawZoneId && arcDraft && (arcDraft.rx > 2 || arcDraft.ry > 2) && (
+          <g style={{ pointerEvents: 'none' }}>
+            <ellipse
+              cx={arcDraft.cx} cy={arcDraft.cy} rx={Math.max(1, arcDraft.rx)} ry={Math.max(1, arcDraft.ry)}
+              fill="rgba(16,185,129,0.12)"
+              stroke="#10b981" strokeWidth={2} strokeDasharray="7,4"
+            />
+            <line x1={arcDraft.cx - 7} y1={arcDraft.cy} x2={arcDraft.cx + 7} y2={arcDraft.cy}
+              stroke="#10b981" strokeWidth={1.5} />
+            <line x1={arcDraft.cx} y1={arcDraft.cy - 7} x2={arcDraft.cx} y2={arcDraft.cy + 7}
+              stroke="#10b981" strokeWidth={1.5} />
+            <text x={arcDraft.cx + Math.max(1, arcDraft.rx) + 6} y={arcDraft.cy + 4}
+              fontSize={10} fill="#6ee7b7" fontWeight={600}
+              style={{ userSelect: 'none' }}>
+              {(arcDraft.rx / Math.max(1, size.h)).toFixed(2)} × {(arcDraft.ry / Math.max(1, size.h)).toFixed(2)}
+            </text>
+          </g>
+        )}
+
+        {/* Pending ellipse (drawn, awaiting confirm) */}
+        {arcDrawZoneId && arcPending && (
+          <g style={{ pointerEvents: 'none' }}>
+            <ellipse
+              cx={arcPending.cx} cy={arcPending.cy} rx={Math.max(1, arcPending.rx)} ry={Math.max(1, arcPending.ry)}
+              fill="rgba(16,185,129,0.14)"
+              stroke="#10b981" strokeWidth={2.5} strokeDasharray="7,4"
+            />
+            <line x1={arcPending.cx - 7} y1={arcPending.cy} x2={arcPending.cx + 7} y2={arcPending.cy}
+              stroke="#10b981" strokeWidth={1.5} />
+            <line x1={arcPending.cx} y1={arcPending.cy - 7} x2={arcPending.cx} y2={arcPending.cy + 7}
+              stroke="#10b981" strokeWidth={1.5} />
+          </g>
+        )}
       </svg>
+
+      {/* Arc draw UI: instruction or confirm/cancel */}
+      {arcDrawZoneId && (
+        <div style={{
+          position: 'absolute', top: 0, left: 0, right: 0, zIndex: 3,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          background: 'rgba(5,120,85,0.92)',
+          color: '#fff',
+          padding: '6px 10px',
+          fontSize: 11, fontWeight: 600,
+          borderRadius: '8px 8px 0 0',
+          letterSpacing: '0.01em',
+        }}>
+          {!arcPending ? (
+            <>
+              <span>⌢ 拖拽设置圆弧圆 — 中心点 + 半径</span>
+              <button
+                onClick={cancelArcDraw}
+                style={{ marginLeft: 8, padding: '1px 8px', borderRadius: 4, border: '1px solid rgba(255,255,255,0.4)', background: 'transparent', color: '#fff', cursor: 'pointer', fontSize: 10 }}
+              >取消</button>
+            </>
+          ) : (
+            <>
+              <span>确认使用此圆弧？</span>
+              <button
+                onClick={() => commitArcDraw(arcPending)}
+                style={{ padding: '2px 12px', borderRadius: 4, border: 'none', background: '#fff', color: '#059669', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}
+              >确认</button>
+              <button
+                onClick={() => setArcPending(null)}
+                style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(255,255,255,0.4)', background: 'transparent', color: '#fff', cursor: 'pointer', fontSize: 10 }}
+              >重画</button>
+              <button
+                onClick={cancelArcDraw}
+                style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(255,255,255,0.3)', background: 'transparent', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', fontSize: 10 }}
+              >取消</button>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Legend */}
       <div style={{ position: 'absolute', bottom: 6, right: 6, display: 'flex', gap: 6, pointerEvents: 'none' }}>

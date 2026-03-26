@@ -94,13 +94,19 @@ function SlotRow({
   )
 }
 
+const FONT_FAMILIES = [
+  'Arial', 'Helvetica', 'Times New Roman', 'Georgia',
+  'Courier New', 'Verdana', 'Trebuchet MS', 'Impact',
+]
+
 function TextZoneRow({
-  zone, index, onChange, onDelete,
+  zone, index, onChange, onDelete, onStartArcDraw,
 }: {
   zone: TextZoneRect
   index: number
   onChange: (z: TextZoneRect) => void
   onDelete: () => void
+  onStartArcDraw: () => void
 }) {
   return (
     <div className="p-2.5 bg-emerald-50 border border-emerald-100 rounded-lg text-xs space-y-1.5">
@@ -122,6 +128,174 @@ function TextZoneRow({
         <span>w: {zone.w.toFixed(3)}</span>
         <span>h: {zone.h.toFixed(3)}</span>
       </div>
+      {/* Default text */}
+      <div>
+        <label className="block text-gray-400 mb-0.5">Default Text</label>
+        <input
+          value={zone.defaultText ?? ''}
+          onChange={e => onChange({ ...zone, defaultText: e.target.value || undefined })}
+          placeholder="Pre-filled text for end users"
+          className="w-full px-1.5 py-0.5 border border-emerald-200 rounded text-xs"
+        />
+      </div>
+      {/* Font family */}
+      <div>
+        <label className="block text-gray-400 mb-0.5">Font Family</label>
+        <select
+          value={zone.fontFamily ?? 'Arial'}
+          onChange={e => onChange({ ...zone, fontFamily: e.target.value })}
+          className="w-full px-1 py-0.5 border border-emerald-200 rounded text-xs"
+        >
+          {FONT_FAMILIES.map(f => <option key={f}>{f}</option>)}
+        </select>
+      </div>
+      {/* Font size */}
+      <div>
+        <label className="block text-gray-400 mb-0.5">Font Size — % of zone height</label>
+        <div className="flex items-center gap-1.5">
+          <input
+            type="range" min={20} max={150} step={1}
+            value={zone.fontSize ?? 50}
+            onChange={e => onChange({ ...zone, fontSize: Number(e.target.value) })}
+            className="flex-1 accent-emerald-500"
+          />
+          <span className="w-7 text-right font-mono text-gray-600">{zone.fontSize ?? 50}</span>
+        </div>
+      </div>
+      {/* Color + Align */}
+      <div className="grid grid-cols-2 gap-1.5">
+        <div>
+          <label className="block text-gray-400 mb-0.5">Color</label>
+          <div className="flex items-center gap-1">
+            <input
+              type="color"
+              value={zone.color ?? '#ffffff'}
+              onChange={e => onChange({ ...zone, color: e.target.value })}
+              className="w-6 h-6 rounded border-0 p-0 cursor-pointer"
+            />
+            <span className="font-mono text-gray-500 text-[10px]">{zone.color ?? '#ffffff'}</span>
+          </div>
+        </div>
+        <div>
+          <label className="block text-gray-400 mb-0.5">Align</label>
+          <div className="flex gap-0.5">
+            {(['left', 'center', 'right'] as const).map(a => (
+              <button
+                key={a}
+                onClick={() => onChange({ ...zone, align: a })}
+                className={`flex-1 py-0.5 rounded text-[10px] border ${
+                  (zone.align ?? 'center') === a
+                    ? 'bg-emerald-600 text-white border-emerald-600'
+                    : 'text-gray-500 border-emerald-200 hover:bg-emerald-100'
+                }`}
+              >
+                {a === 'left' ? 'L' : a === 'right' ? 'R' : 'C'}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      {/* Stroke width */}
+      <div>
+        <label className="block text-gray-400 mb-0.5">Stroke Width — % of zone height</label>
+        <div className="flex items-center gap-1.5">
+          <input
+            type="range" min={0} max={20} step={0.5}
+            value={zone.strokeWidth ?? 0}
+            onChange={e => onChange({ ...zone, strokeWidth: Number(e.target.value) })}
+            className="flex-1 accent-emerald-500"
+          />
+          <span className="w-7 text-right font-mono text-gray-600">{zone.strokeWidth ?? 0}</span>
+        </div>
+      </div>
+      {/* Stroke color (only when stroke is active) */}
+      {(zone.strokeWidth ?? 0) > 0 && (
+        <div>
+          <label className="block text-gray-400 mb-0.5">Stroke Color</label>
+          <div className="flex items-center gap-1">
+            <input
+              type="color"
+              value={zone.strokeColor ?? '#000000'}
+              onChange={e => onChange({ ...zone, strokeColor: e.target.value })}
+              className="w-6 h-6 rounded border-0 p-0 cursor-pointer"
+            />
+            <span className="font-mono text-gray-500 text-[10px]">{zone.strokeColor ?? '#000000'}</span>
+          </div>
+        </div>
+      )}
+      {/* Arc text */}
+      <div className="pt-1 border-t border-emerald-100">
+        <div className="flex items-center justify-between">
+          <label className="flex items-center gap-1.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={zone.arcEnabled ?? false}
+              onChange={e => {
+                const enabled = e.target.checked
+                onChange({ ...zone, arcEnabled: enabled })
+                if (enabled) onStartArcDraw()
+              }}
+              className="accent-emerald-600"
+            />
+            <span className="text-gray-500 text-[11px] font-medium">Arc text</span>
+          </label>
+          {zone.arcEnabled && (
+            <button
+              onClick={onStartArcDraw}
+              className="text-[10px] text-emerald-700 border border-emerald-300 px-1.5 py-0.5 rounded hover:bg-emerald-50"
+              title="Redraw arc circle on canvas"
+            >
+              ↺ Redraw
+            </button>
+          )}
+        </div>
+      </div>
+      {zone.arcEnabled && (
+        <>
+          <div>
+            <label className="block text-gray-400 mb-0.5">Arc Rx — horizontal semi-axis (× canvas height)</label>
+            <div className="flex items-center gap-1.5">
+              <input
+                type="range" min={0.05} max={3.0} step={0.01}
+                value={zone.arcRx ?? 0.7}
+                onChange={e => onChange({ ...zone, arcRx: Number(e.target.value) })}
+                className="flex-1 accent-emerald-500"
+              />
+              <span className="w-9 text-right font-mono text-gray-600 text-[10px]">{(zone.arcRx ?? 0.7).toFixed(2)}</span>
+            </div>
+          </div>
+          <div>
+            <label className="block text-gray-400 mb-0.5">Arc Ry — vertical semi-axis (× canvas height)</label>
+            <div className="flex items-center gap-1.5">
+              <input
+                type="range" min={0.05} max={3.0} step={0.01}
+                value={zone.arcRy ?? 0.5}
+                onChange={e => onChange({ ...zone, arcRy: Number(e.target.value) })}
+                className="flex-1 accent-emerald-500"
+              />
+              <span className="w-9 text-right font-mono text-gray-600 text-[10px]">{(zone.arcRy ?? 0.5).toFixed(2)}</span>
+            </div>
+          </div>
+          <div>
+            <label className="block text-gray-400 mb-0.5">Arc Direction</label>
+            <div className="flex gap-1">
+              {(['up', 'down'] as const).map(d => (
+                <button
+                  key={d}
+                  onClick={() => onChange({ ...zone, arcDirection: d })}
+                  className={`flex-1 py-0.5 rounded text-[10px] border ${
+                    (zone.arcDirection ?? 'up') === d
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'text-gray-500 border-emerald-200 hover:bg-emerald-100'
+                  }`}
+                >
+                  {d === 'up' ? '⌢ Up' : '⌣ Down'}
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -135,10 +309,11 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
   const [slots, setSlots]         = useState<SlotRect[]>(parseRects(layout.subjectSlotsJson, []))
   const [textZones, setTextZones] = useState<TextZoneRect[]>(parseRects(layout.textZonesJson, []))
 
-  const [saving, setSaving]     = useState(false)
-  const [error, setError]       = useState<string | null>(null)
-  const [drawMode, setDrawMode] = useState<DrawMode>('select')
-  const [bgCrop, setBgCrop]     = useState<BgCrop>(() => parseBgCrop(layout.bgCropJson))
+  const [saving, setSaving]         = useState(false)
+  const [error, setError]           = useState<string | null>(null)
+  const [drawMode, setDrawMode]     = useState<DrawMode>('select')
+  const [bgCrop, setBgCrop]         = useState<BgCrop>(() => parseBgCrop(layout.bgCropJson))
+  const [arcDrawZoneId, setArcDrawZoneId] = useState<string | null>(null)
 
   const aspectRatio = widthMm / heightMm
 
@@ -201,31 +376,35 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
         <div className="flex flex-1 min-h-0 overflow-hidden">
 
           {/* Canvas */}
-          <div className="flex-1 bg-gray-50 p-6 overflow-auto flex flex-col items-center gap-3">
-            {/* Draw mode toolbar */}
-            <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-lg p-1 shadow-sm self-start">
-              {DRAW_TOOLS.map(tool => (
-                <button
-                  key={tool.mode}
-                  title={tool.title}
-                  onClick={() => setDrawMode(tool.mode)}
-                  className={`w-8 h-8 rounded text-sm font-bold transition-colors ${
-                    drawMode === tool.mode
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-gray-500 hover:bg-gray-100'
-                  }`}
-                >
-                  {tool.label}
-                </button>
-              ))}
-              {drawMode !== 'select' && (
-                <span className="ml-1 text-[10px] text-indigo-500 font-medium pr-1">
-                  {drawMode === 'polygon' ? 'click vertices · dbl-click to close' : 'drag to draw'}
-                </span>
-              )}
-            </div>
+          <div className="flex-1 bg-gray-50 p-4 overflow-auto flex flex-col items-center">
+            {/* Toolbar + canvas share the same max-width so they stay aligned */}
+            <div
+              className="flex flex-col gap-2 w-full"
+              style={{ maxWidth: `min(100%, calc((90vh - 260px) * ${aspectRatio}))` }}
+            >
+              {/* Draw mode toolbar */}
+              <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-lg p-1 shadow-sm">
+                {DRAW_TOOLS.map(tool => (
+                  <button
+                    key={tool.mode}
+                    title={tool.title}
+                    onClick={() => setDrawMode(tool.mode)}
+                    className={`w-8 h-8 rounded text-sm font-bold transition-colors ${
+                      drawMode === tool.mode
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-gray-500 hover:bg-gray-100'
+                    }`}
+                  >
+                    {tool.label}
+                  </button>
+                ))}
+                {drawMode !== 'select' && (
+                  <span className="ml-1 text-[10px] text-indigo-500 font-medium pr-1">
+                    {drawMode === 'polygon' ? 'click vertices · dbl-click to close' : 'drag to draw'}
+                  </span>
+                )}
+              </div>
 
-            <div className="w-full max-w-xs">
               <RectCanvas
                 imageUrl={backgroundImageUrl}
                 aspectRatio={aspectRatio}
@@ -237,8 +416,10 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
                 onDrawComplete={() => setDrawMode('select')}
                 bgCrop={bgCrop}
                 onBgCropChange={setBgCrop}
+                arcDrawZoneId={arcDrawZoneId}
+                onArcDrawComplete={() => setArcDrawZoneId(null)}
               />
-              <p className="text-[10px] text-gray-400 text-center mt-2">
+              <p className="text-[10px] text-gray-400 text-center">
                 {sizeCode} {orientation} — {widthMm}×{heightMm} mm
               </p>
               <p className="text-[10px] text-gray-400 text-center">
@@ -308,8 +489,28 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
                   Drag canvas to pan · scroll wheel to zoom
                 </p>
                 <div className="p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-xs space-y-2">
+                  {/* Row 1: label + number input + % + reset */}
                   <div className="flex items-center gap-2">
-                    <span className="text-gray-400 w-12 flex-shrink-0">Scale</span>
+                    <span className="text-gray-400 flex-1">Scale</span>
+                    <input
+                      type="number"
+                      min={10} max={500} step={1}
+                      value={Math.round(bgCrop.scale * 100)}
+                      onChange={e => {
+                        const pct = Number(e.target.value)
+                        if (!isNaN(pct) && pct >= 10 && pct <= 500)
+                          setBgCrop(c => ({ ...c, scale: pct / 100 }))
+                      }}
+                      className="w-16 px-1.5 py-0.5 border border-gray-300 rounded text-xs font-mono text-right flex-shrink-0"
+                    />
+                    <span className="text-gray-400 flex-shrink-0">%</span>
+                    <button
+                      onClick={() => setBgCrop(DEFAULT_BG_CROP)}
+                      className="text-red-400 hover:text-red-600 text-[10px] px-1.5 py-0.5 border border-red-200 rounded flex-shrink-0"
+                    >Reset</button>
+                  </div>
+                  {/* Row 2: − slider + */}
+                  <div className="flex items-center gap-1.5">
                     <button
                       onClick={() => setBgCrop(c => ({ ...c, scale: Math.max(0.1, c.scale - 0.1) }))}
                       className="w-6 h-6 rounded bg-gray-200 hover:bg-gray-300 font-bold flex items-center justify-center flex-shrink-0"
@@ -324,26 +525,11 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
                       onClick={() => setBgCrop(c => ({ ...c, scale: Math.min(5, c.scale + 0.1) }))}
                       className="w-6 h-6 rounded bg-gray-200 hover:bg-gray-300 font-bold flex items-center justify-center flex-shrink-0"
                     >+</button>
-                    <input
-                      type="number"
-                      min={10} max={500} step={1}
-                      value={Math.round(bgCrop.scale * 100)}
-                      onChange={e => {
-                        const pct = Number(e.target.value)
-                        if (!isNaN(pct) && pct >= 10 && pct <= 500)
-                          setBgCrop(c => ({ ...c, scale: pct / 100 }))
-                      }}
-                      className="w-14 px-1 py-0.5 border border-gray-300 rounded text-xs font-mono text-right flex-shrink-0"
-                    />
-                    <span className="text-gray-400 flex-shrink-0">%</span>
                   </div>
-                  <div className="flex items-center justify-between text-gray-400 font-mono text-[10px]">
-                    <span>x: {bgCrop.offsetX.toFixed(3)}</span>
+                  {/* Row 3: offset readout */}
+                  <div className="flex items-center gap-3 text-gray-400 font-mono text-[10px]">
+                    <span>offset x: {bgCrop.offsetX.toFixed(3)}</span>
                     <span>y: {bgCrop.offsetY.toFixed(3)}</span>
-                    <button
-                      onClick={() => setBgCrop(DEFAULT_BG_CROP)}
-                      className="text-red-400 hover:text-red-600 text-[10px] ml-2"
-                    >Reset</button>
                   </div>
                 </div>
               </section>
@@ -396,6 +582,7 @@ export default function LayoutEditorModal({ layout, backgroundImageUrl, onSave, 
                       index={i}
                       onChange={updated => setTextZones(prev => prev.map((x, j) => j === i ? updated : x))}
                       onDelete={() => setTextZones(prev => prev.filter((_, j) => j !== i))}
+                      onStartArcDraw={() => setArcDrawZoneId(z.id)}
                     />
                   ))}
                   {textZones.length === 0 && (

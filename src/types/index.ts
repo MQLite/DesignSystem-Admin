@@ -37,6 +37,28 @@ export interface TextZoneRect {
   y: number
   w: number
   h: number
+  /** Default text pre-filled for the end-user in Step 6. */
+  defaultText?: string
+  /** Font size as % of zone height [20..150]. Default 50. */
+  fontSize?: number
+  /** System font family name. Default 'Arial'. */
+  fontFamily?: string
+  /** Text fill colour as CSS hex '#rrggbb'. Default '#ffffff'. */
+  color?: string
+  /** Stroke/outline width as % of zone height [0..20]. Default 0. */
+  strokeWidth?: number
+  /** Stroke colour as CSS hex '#rrggbb'. Default '#000000'. */
+  strokeColor?: string
+  /** Horizontal text alignment. Default 'center'. */
+  align?: 'left' | 'center' | 'right'
+  /** When true, text is rendered along an ellipse arc instead of a straight baseline. */
+  arcEnabled?: boolean
+  /** Horizontal semi-axis of the arc ellipse as a fraction of canvas height. Default 0.7. */
+  arcRx?: number
+  /** Vertical semi-axis of the arc ellipse as a fraction of canvas height. Default 0.5. */
+  arcRy?: number
+  /** Which way the arc bows. 'up' = convex upward (rainbow); 'down' = convex downward. Default 'up'. */
+  arcDirection?: 'up' | 'down'
 }
 
 /** Mask shape of a subject slot. */
