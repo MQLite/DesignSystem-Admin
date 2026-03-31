@@ -15,9 +15,10 @@ const DEFAULT_CANVAS_LAYOUT = JSON.stringify({
 })
 
 export default function PreviewPanel({ layoutId, onClose }: Props) {
-  const [status, setStatus]       = useState<'loading' | 'done' | 'error'>('loading')
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [error, setError]         = useState<string | null>(null)
+  const [status, setStatus]         = useState<'loading' | 'done' | 'error'>('loading')
+  const [previewUrl, setPreviewUrl]   = useState<string | null>(null)
+  const [aspectRatio, setAspectRatio] = useState<number>(3 / 4)
+  const [error, setError]             = useState<string | null>(null)
 
   useEffect(() => {
     composePreview({
@@ -27,6 +28,8 @@ export default function PreviewPanel({ layoutId, onClose }: Props) {
     })
       .then(res => {
         setPreviewUrl(`/${res.previewRelativePath}`)
+        if (res.widthPx > 0 && res.heightPx > 0)
+          setAspectRatio(res.widthPx / res.heightPx)
         setStatus('done')
       })
       .catch(e => {
@@ -43,7 +46,7 @@ export default function PreviewPanel({ layoutId, onClose }: Props) {
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">✕</button>
         </div>
         <div className="p-5">
-          <div className="aspect-[3/4] bg-gray-100 rounded-xl overflow-hidden flex items-center justify-center">
+          <div className="bg-gray-100 rounded-xl overflow-hidden flex items-center justify-center" style={{ aspectRatio: String(aspectRatio) }}>
             {status === 'loading' && (
               <div className="flex flex-col items-center gap-2 text-gray-400">
                 <svg className="animate-spin w-6 h-6" fill="none" viewBox="0 0 24 24">

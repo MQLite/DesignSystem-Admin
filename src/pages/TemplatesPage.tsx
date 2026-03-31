@@ -1,7 +1,83 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { Background, OccasionType } from '../types'
+import type { Background, BgCrop, OccasionType, TextZoneRect } from '../types'
 import { getBackgrounds, createBackground } from '../api/client'
+
+function parseTextZones(json: string | null | undefined): TextZoneRect[] {
+  if (!json) return []
+  try { return JSON.parse(json) as TextZoneRect[] } catch { return [] }
+}
+
+/** Renders defaultText labels as an SVG overlay on a preview thumbnail. */
+function TextZoneOverlay({ zones, widthMm, heightMm }: {
+  zones: TextZoneRect[]
+  widthMm: number
+  heightMm: number
+}) {
+  const vw = widthMm, vh = heightMm
+  const visible = zones.filter(z => z.defaultText)
+  if (!visible.length) return null
+
+  return (
+    <svg
+      className="absolute inset-0 w-full h-full pointer-events-none"
+      viewBox={`0 0 ${vw} ${vh}`}
+      preserveAspectRatio="none"
+      overflow="visible"
+    >
+      <defs>
+        {visible.filter(z => z.arcEnabled).map(zone => {
+          const cx = (zone.x + zone.w / 2) * vw
+          const cy = (zone.y + zone.h / 2) * vh
+          const halfW = (zone.w / 2) * vw
+          const Rx = Math.max(halfW + 0.1, (zone.arcRx ?? 0.7) * vh)
+          const Ry = Math.max(0.1, (zone.arcRy ?? 0.5) * vh)
+          const isUp = zone.arcDirection !== 'down'
+          const ratio = Math.min(1, halfW / Rx)
+          const yOff = Ry * (1 - Math.sqrt(1 - ratio * ratio))
+          const sy = isUp ? cy + yOff : cy - yOff
+          const sx = cx - halfW, ex = cx + halfW
+          const sweep = isUp ? 0 : 1
+          const d = `M ${sx.toFixed(2)},${sy.toFixed(2)} A ${Rx.toFixed(2)},${Ry.toFixed(2)} 0 0 ${sweep} ${ex.toFixed(2)},${sy.toFixed(2)}`
+          return <path key={zone.id} id={`arc-${zone.id}`} d={d} fill="none" />
+        })}
+      </defs>
+      {visible.map(zone => {
+        const text = zone.defaultText!
+        const fontSizeMm = (zone.fontSize ?? 50) / 100 * zone.h * vh
+        const fill = zone.color ?? '#ffffff'
+        const strokeW = zone.strokeWidth ? (zone.strokeWidth / 100) * zone.h * vh : 0
+        const stroke = zone.strokeColor ?? '#000000'
+        const fontFamily = zone.fontFamily ?? 'Arial'
+        const anchor = zone.align === 'left' ? 'start' : zone.align === 'right' ? 'end' : 'middle'
+        const cx = (zone.x + zone.w / 2) * vw
+        const cy = (zone.y + zone.h / 2) * vh
+        const textX = anchor === 'start' ? zone.x * vw : anchor === 'end' ? (zone.x + zone.w) * vw : cx
+
+        const commonProps = {
+          fontSize: fontSizeMm,
+          fontFamily,
+          fill,
+          ...(strokeW > 0 ? { stroke, strokeWidth: strokeW, paintOrder: 'stroke fill' } : {}),
+        }
+
+        if (zone.arcEnabled) {
+          return (
+            <text key={zone.id} {...commonProps}>
+              <textPath href={`#arc-${zone.id}`} startOffset="50%" textAnchor="middle">{text}</textPath>
+            </text>
+          )
+        }
+
+        return (
+          <text key={zone.id} x={textX} y={cy} textAnchor={anchor} dominantBaseline="middle" {...commonProps}>
+            {text}
+          </text>
+        )
+      })}
+    </svg>
+  )
+}
 
 const OCCASIONS: OccasionType[] = ['Funeral', 'Birthday', 'Others']
 
@@ -127,22 +203,48 @@ export default function TemplatesPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {backgrounds.map(bg => (
+          {backgrounds.map(bg => {
+            const firstLayout = bg.layouts[0]
+            const ar = firstLayout && firstLayout.widthMm > 0 && firstLayout.heightMm > 0
+              ? firstLayout.widthMm / firstLayout.heightMm
+              : 3 / 4
+            const bgCrop: BgCrop | null = (() => {
+              if (!firstLayout?.bgCropJson) return null
+              try { return JSON.parse(firstLayout.bgCropJson) as BgCrop } catch { return null }
+            })()
+            const textZones = parseTextZones(firstLayout?.textZonesJson)
+            return (
             <button
               key={bg.id}
               onClick={() => navigate(`/backgrounds/${bg.id}`)}
               className="text-left bg-white border border-gray-200 rounded-xl overflow-hidden hover:shadow-md hover:border-indigo-300 transition-all group"
             >
-              {/* Thumbnail */}
-              <div className="aspect-[3/4] bg-gray-100 flex items-center justify-center overflow-hidden">
+              {/* Thumbnail — aspect ratio from first layout's mm dimensions */}
+              <div
+                className="relative bg-gray-100 overflow-hidden"
+                style={{ aspectRatio: String(ar) }}
+              >
                 {bg.previewPath ? (
                   <img
                     src={`/${bg.previewPath}`}
                     alt={bg.name}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    className="absolute inset-0 w-full h-full object-contain group-hover:scale-105 transition-transform duration-300"
+                    style={bgCrop ? {
+                      transform: `translate(${bgCrop.offsetX * 100}%, ${bgCrop.offsetY * 100}%) scale(${bgCrop.scale})`,
+                      transformOrigin: 'center center',
+                    } : undefined}
                   />
                 ) : (
-                  <span className="text-gray-300 text-5xl">🖼️</span>
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <span className="text-gray-300 text-5xl">🖼️</span>
+                  </div>
+                )}
+                {firstLayout && (
+                  <TextZoneOverlay
+                    zones={textZones}
+                    widthMm={firstLayout.widthMm}
+                    heightMm={firstLayout.heightMm}
+                  />
                 )}
               </div>
 
@@ -159,7 +261,8 @@ export default function TemplatesPage() {
                 </div>
               </div>
             </button>
-          ))}
+          )
+          })}
         </div>
       )}
     </div>

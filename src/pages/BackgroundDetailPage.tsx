@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import type { Background, BackgroundLayout, OccasionType, UpdateLayoutRequest } from '../types'
+import type { Background, BackgroundLayout, BgCrop, OccasionType, SlotRect, UpdateLayoutRequest } from '../types'
 import {
   getBackground,
   uploadBackgroundImage,
@@ -41,6 +41,8 @@ export default function BackgroundDetailPage() {
   const [editingLayout, setEditingLayout] = useState<BackgroundLayout | null>(null)
   // Preview modal
   const [previewLayoutId, setPreviewLayoutId] = useState<string | null>(null)
+  // Which layout is shown in the left-column thumbnail (defaults to first)
+  const [selectedPreviewLayoutId, setSelectedPreviewLayoutId] = useState<string | null>(null)
 
   useEffect(() => {
     if (id) load(id)
@@ -141,6 +143,17 @@ export default function BackgroundDetailPage() {
   if (loading) return <div className="text-gray-400 text-sm py-8">Loading…</div>
   if (!bg) return <div className="text-red-500 text-sm py-8">{error ?? 'Not found'}</div>
 
+  const previewLayout =
+    (selectedPreviewLayoutId ? bg.layouts.find(l => l.id === selectedPreviewLayoutId) : null)
+    ?? bg.layouts[0]
+    ?? null
+  const previewAspect =
+    previewLayout && previewLayout.widthMm > 0 && previewLayout.heightMm > 0
+      ? previewLayout.widthMm / previewLayout.heightMm
+      : 3 / 4
+  const previewBgCrop = parseBgCrop(previewLayout?.bgCropJson)
+  const previewSlots  = parseSlots(previewLayout?.subjectSlotsJson)
+
   return (
     <div className="space-y-6">
       {/* Breadcrumb */}
@@ -161,15 +174,51 @@ export default function BackgroundDetailPage() {
 
         {/* ── Left column: image ── */}
         <div>
-          <div className="relative aspect-[3/4] bg-gray-100 rounded-xl overflow-hidden border border-gray-200">
+          <div
+            className="relative bg-gray-100 rounded-xl overflow-hidden border border-gray-200"
+            style={{ aspectRatio: String(previewAspect) }}
+          >
             {bg.previewPath ? (
-              <img src={`/${bg.previewPath}?t=${imgCacheBust}`} alt={bg.name} className="w-full h-full object-cover" />
+              <img
+                src={`/${bg.previewPath}?t=${imgCacheBust}`}
+                alt={bg.name}
+                className="absolute inset-0 w-full h-full object-contain"
+                style={previewBgCrop ? {
+                  transform: `translate(${previewBgCrop.offsetX * 100}%, ${previewBgCrop.offsetY * 100}%) scale(${previewBgCrop.scale})`,
+                  transformOrigin: 'center center',
+                } : undefined}
+              />
             ) : (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-300 gap-2">
                 <span className="text-5xl">🖼️</span>
                 <span className="text-xs">No image</span>
               </div>
             )}
+
+            {/* Slot overlays */}
+            {previewSlots.map(slot => (
+              <div
+                key={slot.id}
+                className="absolute pointer-events-none"
+                style={{
+                  left: `${slot.x * 100}%`,
+                  top: `${slot.y * 100}%`,
+                  width: `${slot.w * 100}%`,
+                  height: `${slot.h * 100}%`,
+                  border: '2px dashed rgba(255,255,255,0.85)',
+                  boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.35)',
+                  ...slotOverlayStyle(slot),
+                }}
+              />
+            ))}
+
+            {/* Layout badge */}
+            {previewLayout && (
+              <div className="absolute bottom-2 left-2 text-[9px] bg-black/50 text-white px-1.5 py-0.5 rounded pointer-events-none">
+                {previewLayout.sizeCode} {previewLayout.orientation}
+              </div>
+            )}
+
             {uploading && (
               <div className="absolute inset-0 bg-white/80 flex items-center justify-center">
                 <span className="text-sm text-gray-500">Uploading…</span>
@@ -266,7 +315,12 @@ export default function BackgroundDetailPage() {
                 {bg.layouts.map(layout => (
                   <div
                     key={layout.id}
-                    className="flex items-center gap-3 p-3 border border-gray-100 rounded-lg hover:border-gray-200"
+                    onClick={() => setSelectedPreviewLayoutId(layout.id)}
+                    className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
+                      previewLayout?.id === layout.id
+                        ? 'border-indigo-300 bg-indigo-50'
+                        : 'border-gray-100 hover:border-gray-200'
+                    }`}
                   >
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-900">
@@ -329,4 +383,28 @@ export default function BackgroundDetailPage() {
 function tryParseCount(json: string | null | undefined): number {
   if (!json) return 0
   try { return (JSON.parse(json) as unknown[]).length } catch { return 0 }
+}
+
+function parseBgCrop(json: string | null | undefined): BgCrop | null {
+  if (!json) return null
+  try { return JSON.parse(json) as BgCrop } catch { return null }
+}
+
+function parseSlots(json: string | null | undefined): SlotRect[] {
+  if (!json) return []
+  try { return JSON.parse(json) as SlotRect[] } catch { return [] }
+}
+
+function slotOverlayStyle(slot: SlotRect): React.CSSProperties {
+  const shape = slot.shape ?? 'rect'
+  if (shape === 'ellipse') return { borderRadius: '50%' }
+  if (shape === 'polygon' && slot.points && slot.points.length >= 3) {
+    const pts = slot.points
+      .map(([px, py]) =>
+        `${((px - slot.x) / slot.w * 100).toFixed(2)}% ${((py - slot.y) / slot.h * 100).toFixed(2)}%`
+      )
+      .join(', ')
+    return { clipPath: `polygon(${pts})` }
+  }
+  return {}
 }
